@@ -1,0 +1,6 @@
+
+TR:HIPPO:CellLine -- ignore
+TR: -- denotes treatment
+TR:varname[i]:{Stimuli,Inhibitors}
+DA: initial measurement
+DV: final measurement
