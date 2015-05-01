@@ -2,9 +2,13 @@ import networkx as nx
 import numpy as np
 import scipy as scp
 from collections import defaultdict,Counter
-from utils import concat,bs,h
+from itertools import combinations
+from utils import concat,bs,h,transpose,mi,hamming
+from project_utils import random_combination,rpower_law
 from tqdm import tqdm,trange
 import random
+from matplotlib import pyplot as plt
+from parse_experimental_data import experimental_data
 
 class NetStruct(object):
     def __init__(self,adjacencies,names=None):
@@ -58,19 +62,36 @@ class Hypothesis(object):
             state = new_state
         return history
 
+    def clamped_converge(self,state,clamp_settings):
+        history = {}
+        while not hashify(state) in history:
+            new_state = self.iterate(state)
+            new_state = clamp(state,clamp_settings)
+            history[hashify(state)] = hashify(new_state)
+            state = new_state
+        return history
+        
     def converge_to_attractor(self,state=None):
         if state is None:
             state = random_state(self.V)
         hist = self.converge(state)
         attractor = attractor_from_history(hist)
         return [unhashify(state) for state in attractor]
-        
 
     def sample_from_equilibrium(self,init_state=None):
         """sample from attractors"""
         if init_state is None:
             init_state = np.random.randint(0,2,self.V)
         hist = self.converge(init_state)
+        attractor = attractor_from_history(hist)
+        hashed_choice = random.choice(attractor)
+        return unhashify(hashed_choice)
+
+    def sample_from_clamped_equilibrium(self,init_state=None,clamp_settings=[]):
+        """run network dynamics until equilibrium, clamping input vertices to desired levels."""
+        if init_state is None:
+            init_state = np.random.randint(0,2,self.V)
+        hist = self.clamped_converge(init_state,clamp_settings)
         attractor = attractor_from_history(hist)
         hashed_choice = random.choice(attractor)
         return unhashify(hashed_choice)
@@ -96,7 +117,7 @@ class Hypothesis(object):
         sanity = 0
         for hashed_state,prob in probs.items():
             state = unhashify(hashed_state)
-            new_state = intervene(state,experiment)
+            new_state = clamp(state,experiment)
             new_att = self.converge_to_attractor(new_state)
             att_size = float(len(new_att))
             #print "att_size:",att_size
@@ -106,13 +127,52 @@ class Hypothesis(object):
                     lik += prob/att_size
             #print "sanity:",sanity
         return lik
-        
-def intervene(state,experiment):
+
+    def experiment_likelihood(self,(treatment,response),trials=1000):
+        """Given experimental data in the form of clamped treatment variables
+        and observed response, estimate likelihood of hypothesis."""
+        init_obs = {k:v[0] for k,v in response.items() if sum(v) >= 0} # exclude nans
+        final_obs = {k:v[1] for k,v in response.items() if sum(v) >= 0}
+        discrepancies = []
+        for i in trange(trials):
+            init_state = clamp(random_state(self.V),init_obs)
+            final_state = self.sample_from_clamped_equilibrium(init_state,treatment)
+            desired_state = clamp(final_state,final_obs)
+            discrepancy = hamming(final_state,desired_state)
+            discrepancies.append(discrepancy)
+        return discrepancies
+
+    def experiments_likelihood(self,experiments,trials=100):
+        return concat([self.experiment_likelihood(experiment,trials)
+                       for experiment in experiments])
+            
+
+def main_experiment(hyp_trials = 10,trials_per_exp=100):
+    """try to find a good hypothesis which minimizes discrepancy"""
+    hyps = []
+    discs = []
+    for i in range(hyp_trials):
+        hyp = Hypothesis(ab_network)
+        disc = hyp.experiments_likelihood(experimental_data,trials_per_exp)
+        print sum(disc)
+        hyps.append(hyp)
+        discs.append(disc)
+    return hyps,discs
+
+def clamp(state,experiment):
+    if type(experiment) is dict:
+        experiment = clamp_sabot(experiment)
     new_state = np.copy(state)
     for i,val in experiment:
         new_state[i] = val
     return new_state
 
+def clamp_sabot(treatment_dict):
+    """convert a dictionary of the form {name:val} into a list of tuples
+    that clamp function understands"""
+    idx_from_name = {name:i for (i,name) in ab_network.names.items()}
+    return [(idx_from_name[name],val) for (name,val) in treatment_dict.items()]
+    
 def agrees_with_experiment(state,experiment):
     return all([state[i] == val for (i,val) in experiment])
     
@@ -158,7 +218,7 @@ def attractor_from_history(hist):
         state = hist[state]
     try:
         idx,_ = min(enumerate(cycle),key=lambda (i,x):int(x))
-        print "idx:",idx
+        #print "idx:",idx
         sorted_cycle = tuple(cycle[idx:]+cycle[:idx])
     except:
         print hist
@@ -190,28 +250,44 @@ def pop_estimator(obs):
         return 2**h([v/N for v in re_obs])
     return [resample_pop() for i in range(100)]
 
-def big_test():
-    V = 100
-    k = 3
-    num_experiments = 10
-    num_inputs = 4
-    num_outputs = 4
-    true_tts = [random_truth_table(k) for i in range(V)]
+def big_test(num_experiments=1000):
+    V = 2 # number of vertices
+    #k = 50 # number of incoming edges per vertex
+    #num_experiments = 10 # number of perturbations to perform
+    num_inputs = 1 # number of inputs to be clamped (first N in array)
+    num_outputs = 1 # number of vertices to be measured
+    indegrees = [rpower_law(M=V) for i in range(V)]
+    true_tts = [random_truth_table(indeg) for indeg in indegrees] # ground truth for boolean functions at each vertex
     adjs = []
-    for j in range(V):
-        for i in range(k):
-            adjs.append((random.randrange(V),j,random.choice([1,-1])))
-    g = NetStruct(adjs)
-    true_hyp = Hypothesis(g,true_tts)
+    # initialize adjacency matrix randomly
+    for j,indeg in zip(range(V),indegrees):
+        # choose incoming edges without replacement
+        incoming_edges = random_combination(range(V),indeg)
+        for in_edge in incoming_edges:
+            adjs.append((in_edge,j,random.choice([1,-1])))
+    g = NetStruct(adjs) # build a network structure object out of adjacencies
+    true_hyp = Hypothesis(g,true_tts) # build hypothesis out of netstruct + vertex functions
+    # do the experiments
     experimental_evidence = []
-    for _ in xrange(num_experiments):
+    for _ in trange(num_experiments):
+        #decide how num_inputs (0..num_inputs) will be clamped
         perturbation = [(i,random.randrange(2)) for i in range(num_inputs)]
-        init_state = intervene(random_state(V),perturbation)
+        # randomize initial state and clamp
+        init_state = clamp(random_state(V),perturbation)
+        # run state to equilibrium
         final_state = true_hyp.sample_from_equilibrium(init_state)
+        # observe outputs (V-num_outputs...V)
         observations = [(i,final_state[i]) for i in range(V-num_outputs,V)] # last num_output states observed
+        # record observations
         experimental_evidence.append(perturbation + observations)
     return experimental_evidence
         
+def mi_from_experiments(experiments):
+    cols = transpose([map(lambda x:x[1],row) for row in experiments])
+    plt.imshow([[mi(col1,col2,correct=False) for col1 in cols] for col2 in (cols)],
+               interpolation='none')
+    plt.colorbar()
+    plt.show()
     
 def parse_ab_network():
     """parse ab network and return graph object"""
@@ -223,9 +299,12 @@ def parse_ab_network():
     name_from_idx = {i:name for (name,i) in idx_from_name.items()}
     processed_lines = [(idx_from_name[src],idx_from_name[trg],sgn) for (src,trg,sgn) in lines]
     return NetStruct(processed_lines,name_from_idx)
-    
+
+ab_network = parse_ab_network()
+
 def hypothesize(net_struct):
     """given a network structure, return a random hypothesis respecting the network structure"""
     in_degrees = net_struct.graph.in_degree()
     ks = [in_degrees[i] for i in xrange(net_struct.V)]
     return [random_truth_table(k) for k in ks]
+

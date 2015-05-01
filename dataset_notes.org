@@ -4,3 +4,12 @@ TR: -- denotes treatment
 TR:varname[i]:{Stimuli,Inhibitors}
 DA: initial measurement
 DV: final measurement
+
+--- 
+wait, doesn't DA times of measurements, and DV the initial and
+final values?  (we don't particularly care about times) 
+
+Fri Apr 10 16:10:03 EDT 2015
+  - characterize MI between input, output nodes as a function of V,k,num_inputs,num_outputs
+
+
