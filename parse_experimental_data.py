@@ -17,16 +17,16 @@ with open("AB_data_Boolean.csv") as f:
 
 header = lines[0]
 data_lines = [map(float,line) for line in lines[1:]]
-num_variables = 28
+num_tr_variables = 28
 num_experiments = 30
 
-experiment_lines = [(data_lines[i],data_lines[30+i]) for i in range(num_experiments)]
+experiment_lines = [(data_lines[i],data_lines[num_experiments+i]) for i in range(num_experiments)]
 for i,(before,after) in enumerate(experiment_lines):
-    agreed = before[:num_variables] == after[:num_variables]
+    agreed = before[:num_tr_variables] == after[:num_tr_variables]
     print i,agreed
     if not agreed:
-        print before[:num_variables]
-        print after[:num_variables]
+        print before[:num_tr_variables]
+        print after[:num_tr_variables]
 
 raw_exp_dicts = [{h:data for h,data in zip(header,transpose(experiment))} for experiment in experiment_lines]
 

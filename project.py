@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 from parse_experimental_data import experimental_data
 
 class NetStruct(object):
-    def __init__(self,adjacencies,names=None):
+    def __init__(self,adjacencies,names=None,connectivity=1):
         """adjacencies describes signed directed graph, i.e. edge i -> j
         encoded as (i,j,1), i -| j encoded as (i,j,-1) names is a
         dictionary of the form {i:i_name}.
@@ -128,18 +128,43 @@ class Hypothesis(object):
             #print "sanity:",sanity
         return lik
 
-    def experiment_likelihood(self,(treatment,response),trials=1000):
+    def experiment_likelihood(self,(treatment,observations),trials=1000):
         """Given experimental data in the form of clamped treatment variables
         and observed response, estimate likelihood of hypothesis."""
-        init_obs = {k:v[0] for k,v in response.items() if sum(v) >= 0} # exclude nans
-        final_obs = {k:v[1] for k,v in response.items() if sum(v) >= 0}
+        init_obs = {k:v[0] for k,v in observations.items() if sum(v) >= 0} # exclude nans
+        final_obs = {k:v[1] for k,v in observations.items() if sum(v) >= 0}
         discrepancies = []
+        final_states = []
+        final_unclamped_states = []
+        desired_states = []
+        desired_unclamped_states = []
+        diffs = []
+        unclamped_diffs = []
         for i in trange(trials):
-            init_state = clamp(random_state(self.V),init_obs)
+            rstate = random_state(self.V)
+            init_state = clamp(rstate,init_obs)
             final_state = self.sample_from_clamped_equilibrium(init_state,treatment)
+            final_unclamped_state = self.sample_from_equilibrium(init_state)
+            final_states.append(final_state)
+            final_unclamped_states.append(final_unclamped_state)
             desired_state = clamp(final_state,final_obs)
+            desired_states.append(desired_state)
+            desired_unclamped_state = clamp(final_unclamped_state,final_obs)
+            desired_unclamped_states.append(desired_unclamped_state)
             discrepancy = hamming(final_state,desired_state)
+            unclamped_discrepancy = hamming(final_unclamped_state,desired_state)
+            diff = final_state - desired_state
+            unclamped_diff = final_unclamped_state - desired_unclamped_state
+            diffs.append(diff)
+            unclamped_diffs.append(unclamped_diff)
             discrepancies.append(discrepancy)
+        print "distinct final states:",len(set(map(tuple,final_states)))
+        print "distinct desired states:",len(set(map(tuple,desired_states)))
+        print "distinct final unclamped states:",len(set(map(tuple,final_unclamped_states)))
+        print "distinct desired unclamped states:",len(set(map(tuple,desired_unclamped_states)))
+        print "distinct diffs:",len(set(map(tuple,diffs)))
+        print "distinct unclamped diffs:",len(set(map(tuple,unclamped_diffs)))
+        print [i for i,d in enumerate(diffs[0]) if d != 0]
         return discrepancies
 
     def experiments_likelihood(self,experiments,trials=100):
@@ -147,13 +172,13 @@ class Hypothesis(object):
                        for experiment in experiments])
             
 
-def main_experiment(hyp_trials = 10,trials_per_exp=100):
+def main_experiment(network,exp_data,hyp_trials = 10,trials_per_exp=100):
     """try to find a good hypothesis which minimizes discrepancy"""
     hyps = []
     discs = []
     for i in range(hyp_trials):
-        hyp = Hypothesis(ab_network)
-        disc = hyp.experiments_likelihood(experimental_data,trials_per_exp)
+        hyp = Hypothesis(network)
+        disc = hyp.experiments_likelihood(exp_data,trials_per_exp)
         print sum(disc)
         hyps.append(hyp)
         discs.append(disc)
@@ -170,7 +195,7 @@ def clamp(state,experiment):
 def clamp_sabot(treatment_dict):
     """convert a dictionary of the form {name:val} into a list of tuples
     that clamp function understands"""
-    idx_from_name = {name:i for (i,name) in ab_network.names.items()}
+    idx_from_name = {name:i for (i,name) in reduced_network.names.items()} # FIX THIS
     return [(idx_from_name[name],val) for (name,val) in treatment_dict.items()]
     
 def agrees_with_experiment(state,experiment):
@@ -289,18 +314,25 @@ def mi_from_experiments(experiments):
     plt.colorbar()
     plt.show()
     
-def parse_ab_network():
-    """parse ab network and return graph object"""
-    with open("ab_network_structure.csv") as f:
+def parse_network(fname,connectivity=1):
+    """parse network and return graph object"""
+    with open(fname) as f:
         raw_lines = [line.strip().split(',') for line in f.readlines()]
     lines = [(source,target,int(sgn)) for (source,sgn,target) in raw_lines]
     all_names = list(set(concat([(source,target) for source,target,sgn in lines])))
     idx_from_name = {name:i for (i,name) in enumerate(all_names)}
     name_from_idx = {i:name for (name,i) in idx_from_name.items()}
     processed_lines = [(idx_from_name[src],idx_from_name[trg],sgn) for (src,trg,sgn) in lines]
-    return NetStruct(processed_lines,name_from_idx)
+    return NetStruct(processed_lines,name_from_idx,connectivity=connectivity)
 
+def parse_ab_network():
+    return parse_network("ab_network_structure.csv")
+
+def parse_reduced_network():
+    return parse_network("PKN_Liver_SaezRod_2009",connectivity=0.75)
+    
 ab_network = parse_ab_network()
+reduced_network = parse_reduced_network()
 
 def hypothesize(net_struct):
     """given a network structure, return a random hypothesis respecting the network structure"""
