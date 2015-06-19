@@ -9,6 +9,7 @@ from tqdm import tqdm,trange
 import random
 from matplotlib import pyplot as plt
 from parse_experimental_data import experimental_data
+from parse_toy_model import reduced_experimental_data as toy_data
 
 class NetStruct(object):
     def __init__(self,adjacencies,names=None,connectivity=1):
@@ -16,7 +17,6 @@ class NetStruct(object):
         encoded as (i,j,1), i -| j encoded as (i,j,-1) names is a
         dictionary of the form {i:i_name}.
         """
-        
         self.V = max(concat([[i,j] for (i,j,sgn) in adjacencies])) + 1
         self.adjs = adjacencies
         self.names = names
@@ -195,7 +195,7 @@ def clamp(state,experiment):
 def clamp_sabot(treatment_dict):
     """convert a dictionary of the form {name:val} into a list of tuples
     that clamp function understands"""
-    idx_from_name = {name:i for (i,name) in reduced_network.names.items()} # FIX THIS
+    idx_from_name = {name:i for (i,name) in toy_network.names.items()} # FIX THIS
     return [(idx_from_name[name],val) for (name,val) in treatment_dict.items()]
     
 def agrees_with_experiment(state,experiment):
@@ -250,8 +250,6 @@ def attractor_from_history(hist):
     assert len(cycle) == len(sorted_cycle) and set(cycle) == set(sorted_cycle)
     return sorted_cycle
     
-
-    
 def test_iteration():
     V = 100
     k = 3
@@ -275,12 +273,10 @@ def pop_estimator(obs):
         return 2**h([v/N for v in re_obs])
     return [resample_pop() for i in range(100)]
 
-def big_test(num_experiments=1000):
-    V = 2 # number of vertices
-    #k = 50 # number of incoming edges per vertex
-    #num_experiments = 10 # number of perturbations to perform
-    num_inputs = 1 # number of inputs to be clamped (first N in array)
-    num_outputs = 1 # number of vertices to be measured
+def big_test(V=10,num_inputs=5,num_outputs=5,num_experiments=1000):
+    # V = number of vertices
+    #num_inputs number of inputs to be clamped (first N in array)
+    #num_outputs # number of vertices to be measured
     indegrees = [rpower_law(M=V) for i in range(V)]
     true_tts = [random_truth_table(indeg) for indeg in indegrees] # ground truth for boolean functions at each vertex
     adjs = []
@@ -304,11 +300,30 @@ def big_test(num_experiments=1000):
         # observe outputs (V-num_outputs...V)
         observations = [(i,final_state[i]) for i in range(V-num_outputs,V)] # last num_output states observed
         # record observations
-        experimental_evidence.append(perturbation + observations)
-    return experimental_evidence
+        experimental_evidence.append((perturbation,observations))
+    return g, experimental_evidence, true_hyp
+
+def recover_hyp_from_evidence(g,experiments,n_hyps=1000):
+    """This function is a complement to big test.  Given a network
+    structure and a set of experiments, recover the true hypothesis"""
+    V = g.V
+    num_outputs = len(experiments[0][1])
+    hypothesis_scores = defaultdict(list)
+    for _ in trange(n_hyps):
+        hyp = Hypothesis(g)
+        for perturbation,observation in experiments:
+            init_state = clamp(random_state(V),perturbation)
+            final_state = hyp.sample_from_clamped_equilibrium(init_state,perturbation)
+            actual_observation = {name:final for (name,(init,final)) in observation.items()}
+            hyp_observation = {hyp.graph.names[i]:final_state[i] for i in range(V)
+                               if hyp.graph.names[i] in observation}
+            #hyp_observation = [(hyp.graph.names[i],final_state[i]) for i in range(V-num_outputs,V)]
+            score = sum(hyp_observation[name] == actual_observation[name] for name in actual_observation)
+            hypothesis_scores[hyp].append(score)
+    return hypothesis_scores
         
 def mi_from_experiments(experiments):
-    cols = transpose([map(lambda x:x[1],row) for row in experiments])
+    cols = transpose([map(lambda x:x[1],concat(row)) for row in experiments])
     plt.imshow([[mi(col1,col2,correct=False) for col1 in cols] for col2 in (cols)],
                interpolation='none')
     plt.colorbar()
@@ -329,14 +344,33 @@ def parse_ab_network():
     return parse_network("ab_network_structure.csv")
 
 def parse_reduced_network():
-    return parse_network("PKN_Liver_SaezRod_2009",connectivity=0.75)
-    
+    return parse_network("PKN_Liver_SaezRod_2009")
+
+def parse_toy_network():
+    return parse_network("Toy Model_2009")
+
 ab_network = parse_ab_network()
 reduced_network = parse_reduced_network()
+toy_network = parse_toy_network()
 
+def analyze_toy_network(n_hyps=100000):
+    hyp_scores = recover_hyp_from_evidence(g,experiments,n_hyps)
+    perfect_score = sum([len(obs) for (per,obs) in toy_data])
+    perfect_hyps = [hyp for hyp,vals in hyp_scores.items() if sum(vals) == perfect_score]
+    
 def hypothesize(net_struct):
     """given a network structure, return a random hypothesis respecting the network structure"""
     in_degrees = net_struct.graph.in_degree()
     ks = [in_degrees[i] for i in xrange(net_struct.V)]
     return [random_truth_table(k) for k in ks]
 
+def test_hyp_equality(hyp1,hyp2,trials=1000):
+    V = hyp1.graph.V
+    for trial in xrange(trials):
+        r = random_state(V)
+        if np.all(hyp1.iterate(r) == hyp2.iterate(r)):
+            continue
+        else:
+            print "falsified after %s trials" % trial
+            return False
+    return True
